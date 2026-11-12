@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"net/url"
+	"strings"
 
 	"github.com/MaksimCpp/OzonUrlShortener/internal/config"
 	"github.com/MaksimCpp/OzonUrlShortener/internal/domain"
@@ -20,10 +21,10 @@ type URLService struct {
 
 func NewURLService(
 	repo domain.URLRepository,
-	cfg  *config.Config) *URLService {
+	cfg *config.Config) *URLService {
 	return &URLService{
 		repo: repo,
-		cfg: cfg,
+		cfg:  cfg,
 	}
 }
 
@@ -48,7 +49,7 @@ func (s *URLService) CreateShortURL(
 
 	in := domain.URL{
 		OriginalURL: originalURL,
-		ShortCode: shortCode,
+		ShortCode:   shortCode,
 	}
 
 	result, err := s.repo.Create(ctx, &in)
@@ -64,4 +65,44 @@ func (s *URLService) CreateShortURL(
 	}
 
 	return shortURL, nil
+}
+
+func (s *URLService) GetOriginalURL(
+	ctx context.Context, shortURL string,
+) (string, error) {
+	err := utils.CheckURL(shortURL)
+
+	if err != nil {
+		return "", err
+	}
+
+	parsed, err := url.Parse(shortURL)
+
+	if err != nil {
+		return "", err
+	}
+
+	index := strings.LastIndexByte(parsed.Path, '/')
+	if index < 0 {
+		return "", domain.ErrInvalidShortCode
+	}
+
+	shortCode := parsed.Path[index+1:]
+	if len(shortCode) != shortCodeLength {
+		return "", domain.ErrInvalidShortCode
+	}
+
+	for i := range shortCode {
+		if !strings.ContainsRune(shortCodeAlphabet, rune(shortCode[i])) {
+			return "", domain.ErrInvalidShortCode
+		}
+	}
+
+	result, err := s.repo.GetByShortCode(ctx, shortCode)
+
+	if err != nil {
+		return "", err
+	}
+
+	return result.OriginalURL, nil
 }
