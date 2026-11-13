@@ -9,7 +9,6 @@ import (
 
 type Config struct {
 	DBURL   string
-	AppHost string
 	AppPort string
 	BaseURL string
 }
@@ -25,7 +24,6 @@ func Load() (*Config, error) {
 	
 	return &Config{
 		DBURL: os.Getenv("DATABASE_URL"),
-		AppHost: os.Getenv("APP_HOST"),
 		AppPort: os.Getenv("APP_PORT"),
 		BaseURL: baseURL,
 	}, nil
