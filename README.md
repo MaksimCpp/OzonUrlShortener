@@ -3,9 +3,12 @@
 ## Команды Makefile
 
 ```sh
-make run-postgres  # Запуск с PostgreSQL
-make run-inmemory  # Запуск без PostgreSQL
-make stop          # Остановка
+make up-postgres   # Сборка и запуск с PostgreSQL и миграциями
+make up-inmemory   # Сборка и запуск с хранением в памяти
+make down          # Остановка и удаление контейнеров, без удаления volume БД
+make test          # Все тесты с детектором гонок
+make test-service  # Тесты сервиса с подробным выводом
+make test-handler  # Тесты HTTP-хендлеров с подробным выводом
 ```
 
 При запуске выбранного режима текущие контейнеры проекта останавливаются.
@@ -49,7 +52,7 @@ BASE_URL=http://localhost:8080 APP_PORT=8080 go run ./cmd/server -storage=inmemo
 ```sh
 curl -X POST http://localhost:8080/api/v1/urls \
   -H 'Content-Type: application/json' \
-  -d '{"url":"https://example.com"}'
+  -d '{"url":"https://ozon.ru"}'
 
 curl --get http://localhost:8080/api/v1/urls \
   --data-urlencode 'short_url=http://localhost:8080/XXXXXXXXXX'

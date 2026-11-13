@@ -85,7 +85,7 @@ func (h *URLHandler) GetOriginalURL(w http.ResponseWriter, r *http.Request) {
 	shortURL := r.URL.Query().Get("short_url")
 
 	if shortURL == "" {
-		http.Error(w, "short_url is required", http.StatusNotFound)
+		http.Error(w, "short_url is required", http.StatusBadRequest)
 		return
 	}
 
