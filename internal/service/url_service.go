@@ -2,29 +2,32 @@ package service
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"net/url"
 	"strings"
 
-	"github.com/MaksimCpp/OzonUrlShortener/internal/config"
 	"github.com/MaksimCpp/OzonUrlShortener/internal/domain"
 	"github.com/MaksimCpp/OzonUrlShortener/internal/utils"
 )
 
 const (
 	maxLengthOriginalURL = 2000
+	maxCreateAttempts    = 5
 )
 
 type URLService struct {
-	repo domain.URLRepository
-	cfg  *config.Config
+	repo    domain.URLRepository
+	baseURL string
 }
 
 func NewURLService(
 	repo domain.URLRepository,
-	cfg *config.Config) *URLService {
+	baseURL string,
+) *URLService {
 	return &URLService{
-		repo: repo,
-		cfg:  cfg,
+		repo:    repo,
+		baseURL: baseURL,
 	}
 }
 
@@ -41,30 +44,39 @@ func (s *URLService) CreateShortURL(
 		return "", err
 	}
 
-	shortCode, err := generateShortCode()
+	for attempt := 0; attempt < maxCreateAttempts; attempt++ {
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
 
-	if err != nil {
-		return "", err
+		shortCode, err := generateShortCode()
+		if err != nil {
+			return "", err
+		}
+
+		in := domain.URL{
+			OriginalURL: originalURL, 
+			ShortCode: shortCode,
+		}
+
+		result, err := s.repo.Create(ctx, &in)
+
+		switch {
+		case errors.Is(err, domain.ErrShortCodeAlreadyExists):
+			continue
+
+		case errors.Is(err, domain.ErrURLAlreadyExist):
+			result, err = s.repo.GetByOriginalURL(ctx, originalURL)
+		}
+
+		if err != nil {
+			return "", err
+		}
+		
+		return url.JoinPath(s.baseURL, result.ShortCode)
 	}
 
-	in := domain.URL{
-		OriginalURL: originalURL,
-		ShortCode:   shortCode,
-	}
-
-	result, err := s.repo.Create(ctx, &in)
-
-	if err != nil {
-		return "", err
-	}
-
-	shortURL, err := url.JoinPath(s.cfg.BaseURL, result.ShortCode)
-
-	if err != nil {
-		return "", err
-	}
-
-	return shortURL, nil
+	return "", fmt.Errorf("create short URL after %d attempts: %w", maxCreateAttempts, domain.ErrShortCodeAlreadyExists)
 }
 
 func (s *URLService) GetOriginalURL(

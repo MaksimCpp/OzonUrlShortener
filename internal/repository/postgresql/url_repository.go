@@ -1,4 +1,4 @@
-package repository
+package postgresql
 
 import (
 	"context"
@@ -50,7 +50,12 @@ func (repo *PostgreSQLURLRepository) Create(
 		if errors.As(err, &pgErr) {
 			switch pgErr.Code {
 			case pgerrcode.UniqueViolation:
-				return nil, domain.ErrURLAlreadyExist
+				switch pgErr.ConstraintName {
+				case "urls_original_url_key":
+					return nil, domain.ErrURLAlreadyExist
+				case "urls_short_code_key":
+					return nil, domain.ErrShortCodeAlreadyExists
+				}
 
 			case pgerrcode.StringDataRightTruncationDataException:
 				return nil, domain.ErrInvalidShortCode
@@ -102,6 +107,38 @@ func (repo *PostgreSQLURLRepository) GetByShortCode(
 		}
 
 		return nil, fmt.Errorf("Get URL by short code: %w", err)
+	}
+
+	return &result, nil
+}
+
+func (repo *PostgreSQLURLRepository) GetByOriginalURL(
+	ctx context.Context, originalURL string,
+) (*domain.URL, error) {
+	query := `
+		SELECT id, original_url, short_code
+		FROM urls
+		WHERE original_url = $1;
+	`
+
+	result := domain.URL{}
+
+	err := repo.pool.QueryRow(
+		ctx,
+		query,
+		originalURL,
+	).Scan(
+		&result.ID,
+		&result.OriginalURL,
+		&result.ShortCode,
+	)
+
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, domain.ErrURLNotFound
+		}
+
+		return nil, fmt.Errorf("Get URL by original URL: %w", err)
 	}
 
 	return &result, nil
