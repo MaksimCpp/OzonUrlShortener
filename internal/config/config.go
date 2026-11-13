@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 
 	"github.com/MaksimCpp/OzonUrlShortener/internal/utils"
@@ -8,6 +9,7 @@ import (
 )
 
 type Config struct {
+	Storage string
 	DBURL   string
 	AppPort string
 	BaseURL string
@@ -19,11 +21,16 @@ func Load() (*Config, error) {
 	err := utils.CheckURL(baseURL)
 
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("BASE_URL: %w", err)
 	}
-	
+	storage := os.Getenv("STORAGE")
+	if storage == "" {
+		storage = "postgres"
+	}
+
 	return &Config{
-		DBURL: os.Getenv("DATABASE_URL"),
+		Storage: storage,
+		DBURL:   os.Getenv("DATABASE_URL"),
 		AppPort: os.Getenv("APP_PORT"),
 		BaseURL: baseURL,
 	}, nil

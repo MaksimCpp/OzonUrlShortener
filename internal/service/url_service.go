@@ -99,7 +99,7 @@ func (s *URLService) GetOriginalURL(
 		return "", domain.ErrInvalidShortCode
 	}
 
-	shortCode := parsed.Path[index+1:]
+	shortCode := parsed.Path[index + 1:]
 	if len(shortCode) != shortCodeLength {
 		return "", domain.ErrInvalidShortCode
 	}
