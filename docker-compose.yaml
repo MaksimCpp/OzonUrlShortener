@@ -2,6 +2,7 @@ services:
   app:
     build: .
     environment:
+      STORAGE: postgres
       DATABASE_URL: postgres://${POSTGRES_USER:-shortener}:${POSTGRES_PASSWORD:-shortener}@postgres:5432/${POSTGRES_DB:-shortener}?sslmode=disable
       BASE_URL: ${BASE_URL:-http://localhost:${APP_PORT:-8080}}
       APP_PORT: "8080"

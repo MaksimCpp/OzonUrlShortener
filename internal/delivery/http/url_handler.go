@@ -1,10 +1,12 @@
 package httpdelivery
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"log"
 	"net/http"
+	"time"
 
 	"github.com/MaksimCpp/OzonUrlShortener/internal/domain"
 	"github.com/MaksimCpp/OzonUrlShortener/internal/service"
@@ -33,6 +35,9 @@ type ShortURLResponse struct {
 }
 
 func (h *URLHandler) CreateShortURL(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 5 * time.Second)
+	defer cancel()
+
 	var req OriginalURLRequest
 
 	err := json.NewDecoder(r.Body).Decode(&req)
@@ -42,7 +47,7 @@ func (h *URLHandler) CreateShortURL(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result, err := h.srv.CreateShortURL(r.Context(), req.OriginalURL)
+	result, err := h.srv.CreateShortURL(ctx, req.OriginalURL)
 
 	if err != nil {
 		switch {
@@ -74,6 +79,9 @@ func (h *URLHandler) CreateShortURL(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *URLHandler) GetOriginalURL(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 5 * time.Second)
+	defer cancel()
+
 	shortURL := r.URL.Query().Get("short_url")
 
 	if shortURL == "" {
@@ -81,7 +89,7 @@ func (h *URLHandler) GetOriginalURL(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result, err := h.srv.GetOriginalURL(r.Context(), shortURL)
+	result, err := h.srv.GetOriginalURL(ctx, shortURL)
 
 	if err != nil {
 		switch {
