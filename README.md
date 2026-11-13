@@ -1,5 +1,14 @@
 # URL Shortener
 
+## Docker-образ
+
+Публичный образ: [maksimcpp/ozonurlshortener](https://hub.docker.com/r/maksimcpp/ozonurlshortener).
+Поддерживаемые платформы: `linux/amd64` и `linux/arm64`.
+
+```sh
+docker pull maksimcpp/ozonurlshortener:latest
+```
+
 ## Команды Makefile
 
 ```sh
