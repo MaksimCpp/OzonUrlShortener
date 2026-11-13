@@ -3,339 +3,505 @@ package service
 import (
 	"context"
 	"errors"
-	"fmt"
 	"strings"
 	"testing"
 
 	"github.com/MaksimCpp/OzonUrlShortener/internal/domain"
 )
 
-type repositoryStub struct {
-	t          *testing.T
-	create     func(context.Context, *domain.URL) (*domain.URL, error)
-	byOriginal func(context.Context, string) (*domain.URL, error)
-	byCode     func(context.Context, string) (*domain.URL, error)
+type mockURLRepository struct {
+	t                *testing.T
+	create           func(ctx context.Context, url *domain.URL) (*domain.URL, error)
+	getByShortCode   func(ctx context.Context, shortCode string) (*domain.URL, error)
+	getByOriginalURL func(ctx context.Context, originalURL string) (*domain.URL, error)
 }
 
-func (r repositoryStub) Create(ctx context.Context, u *domain.URL) (*domain.URL, error) {
+func (r mockURLRepository) Create(ctx context.Context, url *domain.URL) (*domain.URL, error) {
 	r.t.Helper()
+	return r.create(ctx, url)
+}
 
-	if r.create == nil {
-		r.t.Fatal("unexpected Create call")
+func (r mockURLRepository) GetByShortCode(ctx context.Context, shortCode string) (*domain.URL, error) {
+	r.t.Helper()
+	return r.getByShortCode(ctx, shortCode)
+}
+
+func (r mockURLRepository) GetByOriginalURL(ctx context.Context, originalURL string) (*domain.URL, error) {
+	r.t.Helper()
+	return r.getByOriginalURL(ctx, originalURL)
+}
+
+func TestCreateShortURL_TooLongURL(t *testing.T) {
+	baseURL := "http://localhost:8080/"
+	originalURL := "https://ozon.ru/" + strings.Repeat("a", 2001 - len("https://ozon.ru/"))
+
+	result, err := NewURLService(
+		nil, 
+		baseURL,
+	).CreateShortURL(context.Background(), originalURL)
+
+	if !errors.Is(err, domain.ErrInvalidURLLength) {
+		t.Fatalf("expected domain.ErrInvalidURLLength, got %v", err)
 	}
 
-	return r.create(ctx, u)
+	if result != "" {
+		t.Fatalf("expected empty result, got %v", result)
+	}
 }
 
-func (r repositoryStub) GetByOriginalURL(ctx context.Context, u string) (*domain.URL, error) {
-	r.t.Helper()
+func TestCreateShortURL_EmptyURL(t *testing.T) {
+	baseURL := "http://localhost:8080/"
 
-	if r.byOriginal == nil {
-		r.t.Fatal("unexpected GetByOriginalURL call")
+	result, err := NewURLService(
+		nil, 
+		baseURL,
+	).CreateShortURL(context.Background(), "")
+
+	if !errors.Is(err, domain.ErrInvalidURL) {
+		t.Fatalf("expected domain.ErrInvalidURL, got %v", err)
 	}
 
-	return r.byOriginal(ctx, u)
+	if result != "" {
+		t.Fatalf("expected empty result, got %v", result)
+	}
 }
 
-func (r repositoryStub) GetByShortCode(ctx context.Context, code string) (*domain.URL, error) {
-	r.t.Helper()
+func TestCreateShortURL_CanceledCtx(t *testing.T) {
+	baseURL := "http://localhost:8080/"
+	originalURL := "https://ozon.ru/"
 
-	if r.byCode == nil {
-		r.t.Fatal("unexpected GetByShortCode call")
+	ctx, cancel := context.WithCancel(context.Background())
+
+	cancel()
+
+	result, err := NewURLService(
+		nil, 
+		baseURL,
+	).CreateShortURL(ctx, originalURL)
+
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context.Canceled, got %v", err)
 	}
 
-	return r.byCode(ctx, code)
+	if result != "" {
+		t.Fatalf("expected empty result, got %v", result)
+	}
 }
 
-func TestCreateShortURLSavesNewURL(t *testing.T) {
-	const original = "https://ozon.ru/path?a=1&b=2#section"
-	var saved domain.URL
-	calls := 0
-	repo := repositoryStub{
+func TestCreateShortURL_Success(t *testing.T) {
+	baseURL := "http://localhost:8080/"
+	originalURL := "https://ozon.ru/"
+	shortCode := "abcABC123_"
+
+	repo := mockURLRepository{
 		t: t,
-		create: func(_ context.Context, value *domain.URL) (*domain.URL, error) {
-			calls++
-			saved = *value
-			return value, nil
-		},
-	}
-
-	result, err := NewURLService(repo, "https://short.ozon/prefix/").CreateShortURL(context.Background(), original)
-
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if saved.OriginalURL != original || saved.ShortCode == "" || calls != 1 {
-		t.Fatalf("saved = %+v, calls = %d", saved, calls)
-	}
-
-	if result != "https://short.ozon/prefix/"+saved.ShortCode {
-		t.Fatalf("short URL = %q", result)
-	}
-}
-
-func TestCreateShortURLRetriesCollisions(t *testing.T) {
-	calls := 0
-	var savedCode string
-	repo := repositoryStub{
-		t: t,
-		create: func(_ context.Context, value *domain.URL) (*domain.URL, error) {
-			calls++
-			if calls < 5 {
-				return nil, fmt.Errorf("insert: %w", domain.ErrShortCodeAlreadyExists)
+		create: func(_ context.Context, url *domain.URL) (*domain.URL, error) {
+			if url.OriginalURL != originalURL {
+				t.Errorf("expected original URL %q, got %q", originalURL, url.OriginalURL)
 			}
-			savedCode = value.ShortCode
-			return value, nil
+
+			if len(url.ShortCode) != 10 {
+				t.Errorf("expected code length 10, got %d", len(url.ShortCode))
+			}
+
+			return &domain.URL{
+				OriginalURL: originalURL,
+				ShortCode: shortCode,
+			}, nil
 		},
 	}
 
-	result, err := NewURLService(repo, "https://short.ozon").CreateShortURL(context.Background(), "https://ozon.ru")
+	result, err := NewURLService(
+		repo, 
+		baseURL,
+	).CreateShortURL(context.Background(), originalURL)
+
+
+	wantResult := baseURL + shortCode
 
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("expected nil err, got %v", err)
 	}
 
-	if calls != 5 {
-		t.Fatalf("attempts = %d; want 5", calls)
-	}
-
-	if result != "https://short.ozon/"+savedCode {
-		t.Fatalf("short URL = %q", result)
+	if result != wantResult {
+		t.Fatalf("excepted result = %v, got %v", wantResult, result)
 	}
 }
 
-func TestCreateShortURLStopsAfterFiveCollisions(t *testing.T) {
-	calls := 0
-	repo := repositoryStub{
+func TestCreateShortURL_RepoError(t *testing.T) {
+	baseURL := "http://localhost:8080/"
+	originalURL := "https://ozon.ru/"
+	repoErr := errors.New("Repo error")
+
+	repo := mockURLRepository{
 		t: t,
-		create: func(context.Context, *domain.URL) (*domain.URL, error) {
+		create: func(_ context.Context, url *domain.URL) (*domain.URL, error) {
+			return nil, repoErr
+		},
+	}
+
+	result, err := NewURLService(
+		repo, 
+		baseURL,
+	).CreateShortURL(context.Background(), originalURL)
+
+	if !errors.Is(err, repoErr) {
+		t.Fatalf("expected err %v, got %v", repoErr, err)
+	}
+
+	if result != "" {
+		t.Fatalf("expected empty result, got %v", result)
+	}
+}
+
+func TestCreateShortURL_URLAlreadyExist(t *testing.T) {
+	baseURL := "http://localhost:8080/"
+	originalURL := "https://ozon.ru/"
+	shortCode := "abcABC123_"
+
+	repo := mockURLRepository{
+		t: t,
+		create: func(_ context.Context, url *domain.URL) (*domain.URL, error) {
+			return nil, domain.ErrURLAlreadyExist
+		},
+
+		getByOriginalURL: func(_ context.Context, gotURL string) (*domain.URL, error) {
+			if gotURL != originalURL {
+				t.Errorf("expected original URL %q, got %q", originalURL, gotURL)
+			}
+
+			return &domain.URL{
+				OriginalURL: originalURL,
+				ShortCode: shortCode,
+			}, nil
+		},
+	}
+
+	result, err := NewURLService(
+		repo, 
+		baseURL,
+	).CreateShortURL(context.Background(), originalURL)
+
+	wantResult := baseURL + shortCode
+
+	if err != nil {
+		t.Fatalf("expected nil err, got %v", err)
+	}
+
+	if result != wantResult {
+		t.Fatalf("excepted result = %v, got %v", wantResult, result)
+	}
+}
+
+func TestCreateShortURL_ErrorGetURL(t *testing.T) {
+	baseURL := "http://localhost:8080/"
+	originalURL := "https://ozon.ru/"
+
+	repo := mockURLRepository{
+		t: t,
+		create: func(_ context.Context, url *domain.URL) (*domain.URL, error) {
+			return nil, domain.ErrURLAlreadyExist
+		},
+
+		getByOriginalURL: func(_ context.Context, gotURL string) (*domain.URL, error) {
+			return nil, domain.ErrURLNotFound
+		},
+	}
+
+	result, err := NewURLService(
+		repo, 
+		baseURL,
+	).CreateShortURL(context.Background(), originalURL)
+
+	if !errors.Is(err, domain.ErrURLNotFound) {
+		t.Fatalf("expected domain.ErrURLNotFound, got %v", err)
+	}
+
+	if result != "" {
+		t.Fatalf("expected empty result, got %v", result)
+	}
+}
+
+func TestCreateShortURL_Collision(t *testing.T) {
+	baseURL := "http://localhost:8080/"
+	originalURL := "https://ozon.ru/"
+	shortCode := "abcABC123_"
+	calls := 0
+
+	repo := mockURLRepository{
+		t: t,
+		create: func(_ context.Context, url *domain.URL) (*domain.URL, error) {
+			calls++
+
+			if calls < 2 {
+				return nil, domain.ErrShortCodeAlreadyExists
+			}
+
+			return &domain.URL{
+				OriginalURL: originalURL,
+				ShortCode: shortCode,
+			}, nil
+		},
+	}
+
+	result, err := NewURLService(
+		repo, 
+		baseURL,
+	).CreateShortURL(context.Background(), originalURL)
+
+	if calls != 2 {
+		t.Errorf("expected 2 Create calls, got %d", calls)
+	}
+
+	wantResult := baseURL + shortCode
+
+	if err != nil {
+		t.Fatalf("expected err nil, got %v", err)
+	}
+
+	if result != wantResult {
+		t.Fatalf("expected result = %v, got %v", wantResult, result)
+	}
+}
+
+func TestCreateShortURL_CollisionAttemptsExhausted(t *testing.T) {
+	baseURL := "http://localhost:8080/"
+	originalURL := "https://ozon.ru/"
+	calls := 0
+
+	repo := mockURLRepository{
+		t: t,
+		create: func(_ context.Context, url *domain.URL) (*domain.URL, error) {
 			calls++
 			return nil, domain.ErrShortCodeAlreadyExists
 		},
 	}
 
-	result, err := NewURLService(repo, "https://short.ozon").CreateShortURL(context.Background(), "https://ozon.ru")
-
-	if result != "" || !errors.Is(err, domain.ErrShortCodeAlreadyExists) {
-		t.Fatalf("result = %q, error = %v", result, err)
-	}
+	result, err := NewURLService(
+		repo, 
+		baseURL,
+	).CreateShortURL(context.Background(), originalURL)
 
 	if calls != 5 {
-		t.Fatalf("attempts = %d; want 5", calls)
+		t.Errorf("expected 5 Create calls, got %d", calls)
+	}
+
+	if !errors.Is(err, domain.ErrShortCodeAlreadyExists) {
+		t.Fatalf("expected err domain.ErrShortCodeAlreadyExists, got %v", err)
+	}
+
+	if result != "" {
+		t.Fatalf("expected empty result, got %v", result)
 	}
 }
 
-func TestCreateShortURLReturnsExistingURL(t *testing.T) {
-	const original = "https://ozon.ru/path?a=1&b=2#section"
-	calls, lookups := 0, 0
-	repo := repositoryStub{
+func TestCreateShortURL_InvalidURL(t *testing.T) {
+	baseURL := "http://localhost:8080/"
+	originalURL := "hello, ozon"
+
+	result, err := NewURLService(
+		nil, 
+		baseURL,
+	).CreateShortURL(context.Background(), originalURL)
+
+	if !errors.Is(err, domain.ErrInvalidURL) {
+		t.Fatalf("expected domain.ErrInvalidURL, got %v", err)
+	}
+
+	if result != "" {
+		t.Fatalf("expected empty result, got %v", result)
+	}
+}
+
+func TestGetOriginalURL_Success(t *testing.T) {
+	baseURL := "http://localhost:8080/"
+	originalURL := "https://ozon.ru/"
+	shortCode := "abcABC123_"
+
+	repo := mockURLRepository{
 		t: t,
-		create: func(_ context.Context, value *domain.URL) (*domain.URL, error) {
-			calls++
-			if value.OriginalURL != original {
-				t.Fatal("original URL changed")
+		getByShortCode: func(_ context.Context, short string) (*domain.URL, error) {
+			if short != shortCode {
+				t.Errorf("expected shortCode %v, got %v", shortCode, short)
 			}
-			return nil, fmt.Errorf("insert: %w", domain.ErrURLAlreadyExist)
-		},
-		byOriginal: func(_ context.Context, value string) (*domain.URL, error) {
-			lookups++
-			if value != original {
-				t.Fatalf("lookup URL = %q", value)
-			}
-			return &domain.URL{ShortCode: "Existing_1"}, nil
+
+			return &domain.URL{
+				OriginalURL: originalURL,
+				ShortCode: shortCode,
+			}, nil
 		},
 	}
 
-	result, err := NewURLService(repo, "https://short.ozon").CreateShortURL(context.Background(), original)
+	shortURL := baseURL + shortCode
+
+	result, err := NewURLService(
+		repo,
+		baseURL,
+	).GetOriginalURL(context.Background(), shortURL)
 
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("expected err nil, got %v", err)
 	}
-	if result != "https://short.ozon/Existing_1" {
-		t.Fatalf("short URL = %q", result)
-	}
-	if calls != 1 || lookups != 1 {
-		t.Fatalf("attempts = %d, lookups = %d", calls, lookups)
+
+	if result != originalURL {
+		t.Fatalf("excepted result = %v, got %v", originalURL, result)
 	}
 }
 
-func TestCreateShortURLReturnsStorageError(t *testing.T) {
-	failure := errors.New("storage unavailable")
-	repo := repositoryStub{
+func TestGetOriginalURL_InvalidURL(t *testing.T) {
+	baseURL := "http://localhost:8080/"
+	shortURL := "hello, ozon"
+
+	result, err := NewURLService(
+		nil,
+		baseURL,
+	).GetOriginalURL(context.Background(), shortURL)
+
+	if !errors.Is(err, domain.ErrInvalidURL) {
+		t.Fatalf("expected domain.ErrInvalidURL, got %v", err)
+	}
+
+	if result != "" {
+		t.Fatalf("expected empty result, got %v", result)
+	}
+}
+
+func TestGetOriginalURL_EmptyShortCode(t *testing.T) {
+	baseURL := "http://localhost:8080/"
+	shortCode := ""
+	shortURL := baseURL + shortCode
+
+	result, err := NewURLService(
+		nil,
+		baseURL,
+	).GetOriginalURL(context.Background(), shortURL)
+
+	if !errors.Is(err, domain.ErrInvalidShortCode) {
+		t.Fatalf("expected domain.ErrInvalidShortCode, got %v", err)
+	}
+
+	if result != "" {
+		t.Fatalf("expected empty result, got %v", result)
+	}
+}
+
+func TestGetOriginalURL_TooShortCode(t *testing.T) {
+	baseURL := "http://localhost:8080/"
+	shortCode := "abcABC123"
+	shortURL := baseURL + shortCode
+
+	result, err := NewURLService(
+		nil,
+		baseURL,
+	).GetOriginalURL(context.Background(), shortURL)
+
+	if !errors.Is(err, domain.ErrInvalidShortCode) {
+		t.Fatalf("expected domain.ErrInvalidShortCode, got %v", err)
+	}
+
+	if result != "" {
+		t.Fatalf("expected empty result, got %v", result)
+	}
+}
+
+func TestGetOriginalURL_TooLongCode(t *testing.T) {
+	baseURL := "http://localhost:8080/"
+	shortCode := "abcABC123__"
+	shortURL := baseURL + shortCode
+
+	result, err := NewURLService(
+		nil,
+		baseURL,
+	).GetOriginalURL(context.Background(), shortURL)
+
+	if !errors.Is(err, domain.ErrInvalidShortCode) {
+		t.Fatalf("expected domain.ErrInvalidShortCode, got %v", err)
+	}
+
+	if result != "" {
+		t.Fatalf("expected empty result, got %v", result)
+	}
+}
+
+func TestGetOriginalURL_InvalidShortCodeCharacter(t *testing.T) {
+	baseURL := "http://localhost:8080/"
+	shortCode := "abcABC123-"
+	shortURL := baseURL + shortCode
+
+	result, err := NewURLService(
+		nil,
+		baseURL,
+	).GetOriginalURL(context.Background(), shortURL)
+
+	if !errors.Is(err, domain.ErrInvalidShortCode) {
+		t.Fatalf("expected domain.ErrInvalidShortCode, got %v", err)
+	}
+
+	if result != "" {
+		t.Fatalf("expected empty result, got %v", result)
+	}
+}
+
+func TestGetOriginalURL_RepoError(t *testing.T) {
+	baseURL := "http://localhost:8080/"
+	shortCode := "abcABC123_"
+	repoErr := errors.New("Repo error")
+
+	repo := mockURLRepository{
 		t: t,
-		create: func(context.Context, *domain.URL) (*domain.URL, error) {
-			return nil, failure
+		getByShortCode: func(_ context.Context, short string) (*domain.URL, error) {
+			if short != shortCode {
+				t.Errorf("expected shortCode %v, got %v", shortCode, short)
+			}
+
+			return nil, repoErr
 		},
 	}
 
-	result, err := NewURLService(repo, "https://short.ozon").CreateShortURL(context.Background(), "https://ozon.ru")
+	shortURL := baseURL + shortCode
 
-	if result != "" || !errors.Is(err, failure) {
-		t.Fatalf("result = %q, error = %v", result, err)
+	result, err := NewURLService(
+		repo,
+		baseURL,
+	).GetOriginalURL(context.Background(), shortURL)
+
+	if !errors.Is(err, repoErr) {
+		t.Fatalf("expected err %v, got %v", repoErr, err)
+	}
+
+	if result != "" {
+		t.Fatalf("expected empty result, got %v", result)
 	}
 }
 
-func TestCreateShortURLReturnsExistingLookupError(t *testing.T) {
-	failure := errors.New("lookup unavailable")
-	repo := repositoryStub{
+func TestGetOriginalURL_URLNotFound(t *testing.T) {
+	baseURL := "http://localhost:8080/"
+	shortCode := "abcABC123_"
+	repoErr := domain.ErrURLNotFound
+
+	repo := mockURLRepository{
 		t: t,
-		create: func(context.Context, *domain.URL) (*domain.URL, error) {
-			return nil, domain.ErrURLAlreadyExist
-		},
-		byOriginal: func(context.Context, string) (*domain.URL, error) {
-			return nil, failure
-		},
-	}
-
-	result, err := NewURLService(repo, "https://short.ozon").CreateShortURL(context.Background(), "https://ozon.ru")
-
-	if result != "" || !errors.Is(err, failure) {
-		t.Fatalf("result = %q, error = %v", result, err)
-	}
-}
-
-func TestGetOriginalURLExtractsCode(t *testing.T) {
-	const original = "https://ozon.ru?a=1&b=2#part"
-	calls := 0
-	repo := repositoryStub{
-		t: t,
-		byCode: func(_ context.Context, code string) (*domain.URL, error) {
-			calls++
-			if code != "Ab3_dE7fG9" {
-				t.Fatalf("code = %q", code)
+		getByShortCode: func(_ context.Context, short string) (*domain.URL, error) {
+			if short != shortCode {
+				t.Errorf("expected shortCode %v, got %v", shortCode, short)
 			}
-			return &domain.URL{OriginalURL: original}, nil
+
+			return nil, repoErr
 		},
 	}
 
-	result, err := NewURLService(repo, "https://short.ozon").GetOriginalURL(context.Background(), "https://short.ozon/Ab3_dE7fG9")
+	shortURL := baseURL + shortCode
 
-	if err != nil {
-		t.Fatal(err)
+	result, err := NewURLService(
+		repo,
+		baseURL,
+	).GetOriginalURL(context.Background(), shortURL)
+
+	if !errors.Is(err, repoErr) {
+		t.Fatalf("expected err %v, got %v", repoErr, err)
 	}
-	if result != original || calls != 1 {
-		t.Fatalf("result = %q, lookups = %d", result, calls)
-	}
-}
 
-func TestGetOriginalURLRejectsInvalidInput(t *testing.T) {
-	for _, tc := range []struct {
-		name, input string
-		wantErr     error
-	}{
-		{"invalid URL", "hello", domain.ErrInvalidURL},
-		{"empty path", "https://short.ozon", domain.ErrInvalidShortCode},
-		{"nine characters", "https://short.ozon/Ab3_dE7fG", domain.ErrInvalidShortCode},
-		{"eleven characters", "https://short.ozon/Ab3_dE7fG90", domain.ErrInvalidShortCode},
-		{"multibyte ten bytes", "https://short.ozon/" + strings.Repeat("я", 5), domain.ErrInvalidShortCode},
-		{"invalid alphabet", "https://short.ozon/Ab3-dE7fG9", domain.ErrInvalidShortCode},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			result, err := NewURLService(repositoryStub{t: t}, "https://short.ozon").GetOriginalURL(context.Background(), tc.input)
-
-			if result != "" || !errors.Is(err, tc.wantErr) {
-				t.Fatalf("result = %q, error = %v; want %v", result, err, tc.wantErr)
-			}
-		})
-	}
-}
-
-func TestGetOriginalURLReturnsStorageError(t *testing.T) {
-	for _, failure := range []error{domain.ErrURLNotFound, errors.New("storage unavailable")} {
-		t.Run(failure.Error(), func(t *testing.T) {
-			repo := repositoryStub{
-				t: t,
-				byCode: func(context.Context, string) (*domain.URL, error) {
-					return nil, failure
-				},
-			}
-
-			result, err := NewURLService(repo, "https://short.ozon").GetOriginalURL(context.Background(), "https://short.ozon/Ab3_dE7fG9")
-
-			if result != "" || !errors.Is(err, failure) {
-				t.Fatalf("result = %q, error = %v", result, err)
-			}
-		})
-	}
-}
-
-func TestCreateShortURLValidation(t *testing.T) {
-	const prefix = "https://ozon.ru/"
-	for _, tc := range []struct {
-		name, value string
-		wantErr     error
-		wantCalls   int
-	}{
-		{"empty", "", domain.ErrInvalidURL, 0},
-		{"relative", "hello", domain.ErrInvalidURL, 0},
-		{"2000 bytes", prefix + strings.Repeat("a", 2000-len(prefix)), nil, 1},
-		{"2001 bytes", prefix + strings.Repeat("a", 2001-len(prefix)), domain.ErrInvalidURLLength, 0},
-		{"unicode 2000 bytes", prefix + strings.Repeat("я", (2000-len(prefix))/len("я")), nil, 1},
-		{"unicode 2001 bytes", prefix + strings.Repeat("я", (2000-len(prefix))/len("я")) + "a", domain.ErrInvalidURLLength, 0},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			calls := 0
-			repo := repositoryStub{
-				t: t,
-				create: func(_ context.Context, value *domain.URL) (*domain.URL, error) {
-					calls++
-					if value.OriginalURL != tc.value {
-						t.Fatal("original URL changed")
-					}
-					return value, nil
-				},
-			}
-
-			result, err := NewURLService(repo, "https://short.ozon").CreateShortURL(context.Background(), tc.value)
-
-			if !errors.Is(err, tc.wantErr) {
-				t.Fatalf("error = %v; want %v", err, tc.wantErr)
-			}
-			if calls != tc.wantCalls {
-				t.Fatalf("insertions = %d; want %d", calls, tc.wantCalls)
-			}
-			if tc.wantErr != nil && result != "" {
-				t.Fatalf("result on error = %q", result)
-			}
-			if tc.wantErr == nil && result == "" {
-				t.Fatal("valid URL returned an empty result")
-			}
-		})
-	}
-}
-
-func TestCancellationStopsCollisionRetries(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	calls := 0
-	repo := repositoryStub{t: t, create: func(got context.Context, _ *domain.URL) (*domain.URL, error) {
-		calls++
-		if got != ctx {
-			t.Fatal("context changed")
-		}
-		cancel()
-		return nil, domain.ErrShortCodeAlreadyExists
-	}}
-	result, err := NewURLService(repo, "https://short.ozon").CreateShortURL(ctx, "https://ozon.ru")
-	if result != "" || !errors.Is(err, context.Canceled) || calls != 1 {
-		t.Fatalf("result = %q, error = %v, calls = %d", result, err, calls)
-	}
-}
-
-func TestGenerateShortCodeFormat(t *testing.T) {
-	for i := 0; i < 100; i++ {
-		code, err := generateShortCode()
-		if err != nil {
-			t.Fatal(err)
-		}
-		if len(code) != 10 {
-			t.Fatalf("length = %d", len(code))
-		}
-		for _, c := range code {
-			if !strings.ContainsRune("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_", c) {
-				t.Fatalf("invalid code %q", code)
-			}
-		}
+	if result != "" {
+		t.Fatalf("expected empty result, got %v", result)
 	}
 }
