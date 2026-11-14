@@ -9,14 +9,13 @@ import (
 	"time"
 
 	"github.com/MaksimCpp/OzonUrlShortener/internal/domain"
-	"github.com/MaksimCpp/OzonUrlShortener/internal/service"
 )
 
 type URLHandler struct {
-	srv *service.URLService
+	srv domain.URLServiceInterface
 }
 
-func NewURLHandler(srv *service.URLService) *URLHandler {
+func NewURLHandler(srv domain.URLServiceInterface) *URLHandler {
 	return &URLHandler{
 		srv: srv,
 	}

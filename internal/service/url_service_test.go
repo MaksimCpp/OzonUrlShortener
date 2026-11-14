@@ -366,60 +366,35 @@ func TestGetOriginalURL_InvalidURL(t *testing.T) {
 	}
 }
 
-func TestGetOriginalURL_EmptyShortCode(t *testing.T) {
+func TestGetOriginalURL_InvalidShortCodeLength(t *testing.T) {
 	baseURL := "http://localhost:8080/"
-	shortCode := ""
-	shortURL := baseURL + shortCode
 
-	result, err := NewURLService(
-		nil,
-		baseURL,
-	).GetOriginalURL(context.Background(), shortURL)
-
-	if !errors.Is(err, domain.ErrInvalidShortCode) {
-		t.Fatalf("expected domain.ErrInvalidShortCode, got %v", err)
+	tests := []struct {
+		name      string
+		shortCode string
+	}{
+		{name: "empty code", shortCode: ""},
+		{name: "too short code", shortCode: "abcABC123"},
+		{name: "too long code", shortCode: "abcABC123__"},
 	}
 
-	if result != "" {
-		t.Fatalf("expected empty result, got %v", result)
-	}
-}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			shortURL := baseURL + test.shortCode
 
-func TestGetOriginalURL_TooShortCode(t *testing.T) {
-	baseURL := "http://localhost:8080/"
-	shortCode := "abcABC123"
-	shortURL := baseURL + shortCode
+			result, err := NewURLService(
+				nil,
+				baseURL,
+			).GetOriginalURL(context.Background(), shortURL)
 
-	result, err := NewURLService(
-		nil,
-		baseURL,
-	).GetOriginalURL(context.Background(), shortURL)
+			if !errors.Is(err, domain.ErrInvalidShortCode) {
+				t.Fatalf("expected domain.ErrInvalidShortCode, got %v", err)
+			}
 
-	if !errors.Is(err, domain.ErrInvalidShortCode) {
-		t.Fatalf("expected domain.ErrInvalidShortCode, got %v", err)
-	}
-
-	if result != "" {
-		t.Fatalf("expected empty result, got %v", result)
-	}
-}
-
-func TestGetOriginalURL_TooLongCode(t *testing.T) {
-	baseURL := "http://localhost:8080/"
-	shortCode := "abcABC123__"
-	shortURL := baseURL + shortCode
-
-	result, err := NewURLService(
-		nil,
-		baseURL,
-	).GetOriginalURL(context.Background(), shortURL)
-
-	if !errors.Is(err, domain.ErrInvalidShortCode) {
-		t.Fatalf("expected domain.ErrInvalidShortCode, got %v", err)
-	}
-
-	if result != "" {
-		t.Fatalf("expected empty result, got %v", result)
+			if result != "" {
+				t.Fatalf("expected empty result, got %v", result)
+			}
+		})
 	}
 }
 
@@ -445,63 +420,42 @@ func TestGetOriginalURL_InvalidShortCodeCharacter(t *testing.T) {
 func TestGetOriginalURL_RepoError(t *testing.T) {
 	baseURL := "http://localhost:8080/"
 	shortCode := "abcABC123_"
-	repoErr := errors.New("Repo error")
 
-	repo := mockURLRepository{
-		t: t,
-		getByShortCode: func(_ context.Context, short string) (*domain.URL, error) {
-			if short != shortCode {
-				t.Errorf("expected shortCode %v, got %v", shortCode, short)
+	tests := []struct {
+		name    string
+		repoErr error
+	}{
+		{name: "URL not found", repoErr: domain.ErrURLNotFound},
+		{name: "repo error", repoErr: errors.New("Repo error")},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			repo := mockURLRepository{
+				t: t,
+				getByShortCode: func(_ context.Context, short string) (*domain.URL, error) {
+					if short != shortCode {
+						t.Errorf("expected shortCode %v, got %v", shortCode, short)
+					}
+
+					return nil, test.repoErr
+				},
 			}
 
-			return nil, repoErr
-		},
-	}
+			shortURL := baseURL + shortCode
 
-	shortURL := baseURL + shortCode
+			result, err := NewURLService(
+				repo,
+				baseURL,
+			).GetOriginalURL(context.Background(), shortURL)
 
-	result, err := NewURLService(
-		repo,
-		baseURL,
-	).GetOriginalURL(context.Background(), shortURL)
-
-	if !errors.Is(err, repoErr) {
-		t.Fatalf("expected err %v, got %v", repoErr, err)
-	}
-
-	if result != "" {
-		t.Fatalf("expected empty result, got %v", result)
-	}
-}
-
-func TestGetOriginalURL_URLNotFound(t *testing.T) {
-	baseURL := "http://localhost:8080/"
-	shortCode := "abcABC123_"
-	repoErr := domain.ErrURLNotFound
-
-	repo := mockURLRepository{
-		t: t,
-		getByShortCode: func(_ context.Context, short string) (*domain.URL, error) {
-			if short != shortCode {
-				t.Errorf("expected shortCode %v, got %v", shortCode, short)
+			if !errors.Is(err, test.repoErr) {
+				t.Fatalf("expected err %v, got %v", test.repoErr, err)
 			}
 
-			return nil, repoErr
-		},
-	}
-
-	shortURL := baseURL + shortCode
-
-	result, err := NewURLService(
-		repo,
-		baseURL,
-	).GetOriginalURL(context.Background(), shortURL)
-
-	if !errors.Is(err, repoErr) {
-		t.Fatalf("expected err %v, got %v", repoErr, err)
-	}
-
-	if result != "" {
-		t.Fatalf("expected empty result, got %v", result)
+			if result != "" {
+				t.Fatalf("expected empty result, got %v", result)
+			}
+		})
 	}
 }
