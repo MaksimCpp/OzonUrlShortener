@@ -1,4 +1,4 @@
-package httpdelivery_test
+package httpdelivery
 
 import (
 	"context"
@@ -9,178 +9,449 @@ import (
 	"net/url"
 	"strings"
 	"testing"
-	"time"
 
-	httpdelivery "github.com/MaksimCpp/OzonUrlShortener/internal/delivery/http"
 	"github.com/MaksimCpp/OzonUrlShortener/internal/domain"
-	"github.com/MaksimCpp/OzonUrlShortener/internal/repository/inmemory"
-	"github.com/MaksimCpp/OzonUrlShortener/internal/service"
 )
 
-func newMux(repo domain.URLRepository) *http.ServeMux {
-	mux := http.NewServeMux()
-	httpdelivery.NewURLHandler(service.NewURLService(repo, "https://short.ozon")).Route(mux)
-	return mux
+type mockURLService struct {
+	t              *testing.T
+	createShortURL func(ctx context.Context, originalURL string) (string, error)
+	getOriginalURL func(ctx context.Context, shortURL string) (string, error)
 }
 
-func request(mux *http.ServeMux, method, target, body string) *httptest.ResponseRecorder {
-	w := httptest.NewRecorder()
-	mux.ServeHTTP(w, httptest.NewRequest(method, target, strings.NewReader(body)))
-	return w
+func (s mockURLService) CreateShortURL(ctx context.Context, originalURL string) (string, error) {
+	s.t.Helper()
+	return s.createShortURL(ctx, originalURL)
 }
 
-func TestURLRoundTrip(t *testing.T) {
-	mux := newMux(inmemory.NewURLRepository())
-	const original = "https://ozon.ru/path?a=1&b=two+words#part"
-
-	short := createShortURL(t, mux, original)
-	repeated := createShortURL(t, mux, original)
-
-	if repeated != short {
-		t.Fatalf("duplicate URL changed: %q != %q", repeated, short)
-	}
-	response := request(mux, http.MethodGet, getTarget(short), "")
-	if response.Code != http.StatusOK {
-		t.Fatalf("GET status = %d: %s", response.Code, response.Body)
-	}
-	var result map[string]string
-	if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil {
-		t.Fatal(err)
-	}
-	if len(result) != 1 || result["url"] != original {
-		t.Fatalf("GET response = %v", result)
-	}
+func (s mockURLService) GetOriginalURL(ctx context.Context, shortURL string) (string, error) {
+	s.t.Helper()
+	return s.getOriginalURL(ctx, shortURL)
 }
 
-func createShortURL(t *testing.T, mux *http.ServeMux, original string) string {
-	t.Helper()
-	body, err := json.Marshal(map[string]string{"url": original})
-	if err != nil {
-		t.Fatal(err)
-	}
-	response := request(mux, http.MethodPost, "/api/v1/urls", string(body))
-	if response.Code != http.StatusCreated {
-		t.Fatalf("POST status = %d: %s", response.Code, response.Body)
-	}
-	if response.Header().Get("Content-Type") != "application/json" {
-		t.Fatal("missing JSON content type")
-	}
-	var result map[string]string
-	if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil {
-		t.Fatal(err)
-	}
-	if len(result) != 1 || !strings.HasPrefix(result["short_url"], "https://short.ozon/") {
-		t.Fatalf("POST response = %v", result)
-	}
-	return result["short_url"]
-}
-
-func getTarget(shortURL string) string {
-	return "/api/v1/urls?" + url.Values{"short_url": {shortURL}}.Encode()
-}
-
-func TestCreateShortURLRejectsInvalidBody(t *testing.T) {
-	for _, tc := range []struct{ name, body string }{
-		{"malformed JSON", "{"},
-		{"missing original", "{}"},
-		{"invalid field type", `{"url":42}`},
-		{"null body", "null"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			response := request(newMux(inmemory.NewURLRepository()), http.MethodPost, "/api/v1/urls", tc.body)
-
-			if response.Code != http.StatusBadRequest {
-				t.Fatalf("status = %d: %s", response.Code, response.Body)
-			}
-		})
-	}
-}
-
-func TestGetOriginalURLRejectsInvalidQuery(t *testing.T) {
-	for _, tc := range []struct{ name, shortURL string }{
-		{"invalid URL", "hello"},
-		{"invalid code", "https://short.ozon/bad"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			response := request(newMux(inmemory.NewURLRepository()), http.MethodGet, getTarget(tc.shortURL), "")
-
-			if response.Code != http.StatusBadRequest {
-				t.Fatalf("status = %d: %s", response.Code, response.Body)
-			}
-		})
-	}
-}
-
-func TestGetOriginalURLReturnsNotFound(t *testing.T) {
-	mux := newMux(inmemory.NewURLRepository())
-
-	response := request(mux, http.MethodGet, getTarget("https://short.ozon/AAAAAAAAAA"), "")
-
-	if response.Code != http.StatusNotFound {
-		t.Fatalf("status = %d: %s", response.Code, response.Body)
-	}
-}
-
-func TestHTTPRouting(t *testing.T) {
-	mux := newMux(inmemory.NewURLRepository())
-	for _, tc := range []struct {
-		name, method, target string
-		status               int
+func TestCreateShortURL_InvalidJSON(t *testing.T) {
+	tests := []struct {
+		name     string
+		jsonData string
 	}{
-		{"wrong method", http.MethodPut, "/api/v1/urls", http.StatusMethodNotAllowed},
-		{"unknown route", http.MethodGet, "/not-a-route", http.StatusNotFound},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			response := request(mux, tc.method, tc.target, "")
+		{name: "opening brace only", jsonData: "{"},
+		{name: "closing brace only", jsonData: "}"},
+		{name: "plain text", jsonData: "hello, ozon"},
+		{name: "unquoted key and value", jsonData: "{url: https://ozon.ru/"},
+	}
 
-			if response.Code != tc.status {
-				t.Fatalf("status = %d; want %d", response.Code, tc.status)
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			r := httptest.NewRequest("POST", "/api/v1/urls", strings.NewReader(test.jsonData))
+
+			NewURLHandler(nil).CreateShortURL(w, r)
+
+			if w.Code != http.StatusBadRequest {
+				t.Fatalf("expected code StatusBadRequest, got %d", w.Code)
+			}
+		})
+
+	}
+}
+
+func TestCreateShortURL_InvalidURL(t *testing.T) {
+	tests := []struct {
+		name string
+		body map[string]string
+	}{
+		{
+			name: "ozon",
+			body: map[string]string{"url": "hello, ozon"},
+		},
+		{
+			name: "go dev",
+			body: map[string]string{"url": "Go-разработка"},
+		},
+		{
+			name: "github file",
+			body: map[string]string{"url": "htps://github.com/MaksimCpp/OzonUrlShortener/blob/main/internal/repository/postgresql/url_repository.go"},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			body, err := json.Marshal(test.body)
+
+			if err != nil {
+				t.Fatalf("expected nil err, got %v", err)
+			}
+
+			r := httptest.NewRequest("POST", "/api/v1/urls", strings.NewReader(string(body)))
+
+			srv := mockURLService{
+				t: t,
+				createShortURL: func(ctx context.Context, originalURL string) (string, error) {
+					if originalURL != test.body["url"] {
+						t.Errorf("expected URL %q, got %q", test.body["url"], originalURL)
+					}
+
+					return "", domain.ErrInvalidURL
+				},
+			}
+
+			NewURLHandler(srv).CreateShortURL(w, r)
+
+			if w.Code != http.StatusBadRequest {
+				t.Fatalf("expected code StatusBadRequest, got %d", w.Code)
 			}
 		})
 	}
 }
 
-type failingRepository struct{ t *testing.T }
+func TestCreateShortURL_InternalError(t *testing.T) {
+	fail := errors.New("unexpected error")
 
-func (r failingRepository) checkContext(ctx context.Context) {
-	r.t.Helper()
-	deadline, ok := ctx.Deadline()
-	if !ok || time.Until(deadline) <= 0 || time.Until(deadline) > 5*time.Second {
-		r.t.Error("repository did not receive the request deadline")
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("POST", "/api/v1/urls", strings.NewReader(`{"url": "https://ozon.ru/"}`))
+
+	srv := mockURLService{
+		t: t,
+		createShortURL: func(ctx context.Context, originalURL string) (string, error) {
+			return "", fail
+		},
+	}
+
+	NewURLHandler(srv).CreateShortURL(w, r)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("expected code StatusInternalServerError, got %d", w.Code)
 	}
 }
 
-func (r failingRepository) Create(ctx context.Context, _ *domain.URL) (*domain.URL, error) {
-	r.checkContext(ctx)
-	return nil, errors.New("private database details")
-}
+func TestCreateShortURL_Success(t *testing.T) {
+	tests := []struct {
+		name     string
+		body     map[string]string
+		response string
+	}{
+		{
+			name:     "ozon",
+			body:     map[string]string{"url": "https://ozon.ru"},
+			response: "http://localhost:8080/abcABC123_",
+		},
+		{
+			name:     "ozon fintech",
+			body:     map[string]string{"url": "https://career.ozon.ru/fintech/vacancy/138892012"},
+			response: "http://localhost:8080/abcAlkC123_",
+		},
+		{
+			name:     "github file",
+			body:     map[string]string{"url": "https://github.com/MaksimCpp/OzonUrlShortener/blob/main/internal/repository/postgresql/url_repository.go"},
+			response: "http://localhost:8080/abcABC427_",
+		},
+	}
 
-func (r failingRepository) GetByShortCode(ctx context.Context, _ string) (*domain.URL, error) {
-	r.checkContext(ctx)
-	return nil, errors.New("private database details")
-}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			body, err := json.Marshal(test.body)
 
-func (r failingRepository) GetByOriginalURL(context.Context, string) (*domain.URL, error) {
-	r.t.Fatal("unexpected GetByOriginalURL")
-	return nil, nil
-}
-
-func TestInternalErrorsAreNotExposed(t *testing.T) {
-	for _, tc := range []struct{ method, target, body string }{
-		{http.MethodPost, "/api/v1/urls", `{"url":"https://ozon.ru"}`},
-		{http.MethodGet, getTarget("https://short.ozon/AAAAAAAAAA"), ""},
-	} {
-		t.Run(tc.method, func(t *testing.T) {
-			mux := newMux(failingRepository{t: t})
-
-			response := request(mux, tc.method, tc.target, tc.body)
-
-			if response.Code != http.StatusInternalServerError {
-				t.Fatalf("status = %d", response.Code)
+			if err != nil {
+				t.Fatalf("expected nil err, got %v", err)
 			}
-			if strings.Contains(response.Body.String(), "private database details") {
-				t.Fatal("response exposed internal details")
+
+			r := httptest.NewRequest("POST", "/api/v1/urls", strings.NewReader(string(body)))
+
+			srv := mockURLService{
+				t: t,
+				createShortURL: func(ctx context.Context, originalURL string) (string, error) {
+					if originalURL != test.body["url"] {
+						t.Errorf("expected URL %q, got %q", test.body["url"], originalURL)
+					}
+
+					return test.response, nil
+				},
+			}
+
+			NewURLHandler(srv).CreateShortURL(w, r)
+
+			if w.Header().Get("Content-Type") != "application/json" {
+				t.Fatalf("expected application/json, got %q", w.Header().Get("Content-Type"))
+			}
+
+			if w.Code != http.StatusCreated {
+				t.Fatalf("expected code StatusCreated, got %d", w.Code)
+			}
+
+			var res struct {
+				ShortURL string `json:"short_url"`
+			}
+
+			err = json.NewDecoder(w.Body).Decode(&res)
+
+			if err != nil {
+				t.Fatalf("expected nil err, got %v", err)
+			}
+
+			if res.ShortURL != test.response {
+				t.Fatalf("expected short URL %v, got %v", test.response, res.ShortURL)
 			}
 		})
+	}
+}
+
+func TestCreateShortURL_InvalidLengthURL(t *testing.T) {
+	target := "/api/v1/urls"
+	addr := "http://ozon.ru/" + strings.Repeat("a", 2001-len("http://ozon.ru/"))
+
+	body, err := json.Marshal(map[string]string{"url": addr})
+
+	if err != nil {
+		t.Fatalf("expected nil err, got %v", err)
+	}
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(
+		"POST",
+		target,
+		strings.NewReader(string(body)),
+	)
+	srv := mockURLService{
+		t: t,
+		createShortURL: func(ctx context.Context, originalURL string) (string, error) {
+			if originalURL != addr {
+				t.Fatalf("expected URL %v, got %v", addr, originalURL)
+			}
+
+			return "", domain.ErrInvalidURLLength
+		},
+	}
+
+	NewURLHandler(srv).CreateShortURL(w, r)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected code StatusBadRequest, got %d", w.Code)
+	}
+}
+
+func TestCreateShortURL_InvalidShortCode(t *testing.T) {
+	target := "/api/v1/urls"
+	addr := "http://ozon.ru/"
+
+	body, err := json.Marshal(map[string]string{"url": addr})
+
+	if err != nil {
+		t.Fatalf("expected nil err, got %v", err)
+	}
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(
+		"POST",
+		target,
+		strings.NewReader(string(body)),
+	)
+	srv := mockURLService{
+		t: t,
+		createShortURL: func(ctx context.Context, originalURL string) (string, error) {
+			if originalURL != addr {
+				t.Fatalf("expected URL %v, got %v", addr, originalURL)
+			}
+
+			return "", domain.ErrInvalidShortCode
+		},
+	}
+
+	NewURLHandler(srv).CreateShortURL(w, r)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected code StatusBadRequest, got %d", w.Code)
+	}
+}
+
+func TestGetOriginalURL_MissingShortURL(t *testing.T) {
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("GET", "/api/v1/urls", nil)
+
+	NewURLHandler(nil).GetOriginalURL(w, r)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected StatusBadRequest, got %v", w.Code)
+	}
+}
+
+func TestGetOriginalURL_Success(t *testing.T) {
+	tests := []struct {
+		name     string
+		param    map[string]string
+		response string
+	}{
+		{
+			name:     "ozon",
+			param:    map[string]string{"short_url": "http://localhost:8080/abcABC123_"},
+			response: "https://ozon.ru",
+		},
+		{
+			name:     "ozon fintech",
+			param:    map[string]string{"short_url": "http://localhost:8080/abcAlkC123_"},
+			response: "https://career.ozon.ru/fintech/vacancy/138892012_",
+		},
+		{
+			name:     "github file",
+			param:    map[string]string{"short_url": "http://localhost:8080/abcABC427_"},
+			response: "https://github.com/MaksimCpp/OzonUrlShortener/blob/main/internal/repository/postgresql/url_repository.go",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			w := httptest.NewRecorder()
+
+			r := httptest.NewRequest(
+				"GET",
+				"/api/v1/urls?short_url="+url.QueryEscape(test.param["short_url"]),
+				nil,
+			)
+
+			srv := mockURLService{
+				t: t,
+				getOriginalURL: func(ctx context.Context, shortURL string) (string, error) {
+					if shortURL != test.param["short_url"] {
+						t.Errorf("expected short URL %q, got %q", test.param["short_url"], shortURL)
+					}
+
+					return test.response, nil
+				},
+			}
+
+			NewURLHandler(srv).GetOriginalURL(w, r)
+
+			if w.Code != http.StatusOK {
+				t.Fatalf("expected code StatusOK, got %d", w.Code)
+			}
+
+			if w.Header().Get("Content-Type") != "application/json" {
+				t.Fatalf("expected application/json, got %q", w.Header().Get("Content-Type"))
+			}
+
+			var res struct {
+				OriginalURL string `json:"url"`
+			}
+
+			err := json.NewDecoder(w.Body).Decode(&res)
+
+			if err != nil {
+				t.Fatalf("expected nil err, got %v", err)
+			}
+
+			if res.OriginalURL != test.response {
+				t.Fatalf("expected original URL %v, got %v", test.response, res.OriginalURL)
+			}
+		})
+	}
+}
+
+func TestGetOriginalURL_ErrorNotFound(t *testing.T) {
+	short := "http://localhost:8080/abcABC123_"
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(
+		"GET",
+		"/api/v1/urls?short_url="+url.QueryEscape(short),
+		nil,
+	)
+
+	srv := mockURLService{
+		t: t,
+		getOriginalURL: func(ctx context.Context, shortURL string) (string, error) {
+			if shortURL != short {
+				t.Fatalf("expected short URL %v, got %v", short, shortURL)
+			}
+
+			return "", domain.ErrURLNotFound
+		},
+	}
+
+	NewURLHandler(srv).GetOriginalURL(w, r)
+
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("expected StatusNotFound, got %v", w.Code)
+	}
+}
+
+func TestGetOriginalURL_InvalidURL(t *testing.T) {
+	tests := []struct {
+		name   string
+		param  map[string]string
+		srvErr error
+	}{
+		{
+			name:   "test 1",
+			param:  map[string]string{"short_url": "http://localhost:8080/abcABC123_"},
+			srvErr: domain.ErrInvalidURL,
+		},
+		{
+			name:   "test 2",
+			param:  map[string]string{"short_url": "http://localhost:8080/abcAlkC123_"},
+			srvErr: domain.ErrInvalidURL,
+		},
+		{
+			name:   "test 3",
+			param:  map[string]string{"short_url": "http;http://localhost:8080/abcABC427_"},
+			srvErr: domain.ErrInvalidShortCode,
+		},
+		{
+			name:   "test 4",
+			param:  map[string]string{"short_url": "hi:://ozon"},
+			srvErr: domain.ErrInvalidShortCode,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			w := httptest.NewRecorder()
+
+			r := httptest.NewRequest(
+				"GET",
+				"/api/v1/urls?short_url="+url.QueryEscape(test.param["short_url"]),
+				nil,
+			)
+
+			srv := mockURLService{
+				t: t,
+				getOriginalURL: func(ctx context.Context, shortURL string) (string, error) {
+					if shortURL != test.param["short_url"] {
+						t.Errorf("expected short URL %q, got %q", test.param["short_url"], shortURL)
+					}
+
+					return "", test.srvErr
+				},
+			}
+
+			NewURLHandler(srv).GetOriginalURL(w, r)
+
+			if w.Code != http.StatusBadRequest {
+				t.Fatalf("expected code StatusBadRequest, got %d", w.Code)
+			}
+		})
+	}
+}
+
+func TestGetOriginalURL_InternalError(t *testing.T) {
+	fail := errors.New("unexpected error")
+	short := "http://localhost:8080/abcABC123_"
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(
+		"GET",
+		"/api/v1/urls?short_url="+url.QueryEscape(short),
+		nil,
+	)
+	srv := mockURLService{
+		t: t,
+		getOriginalURL: func(ctx context.Context, shortURL string) (string, error) {
+			return "", fail
+		},
+	}
+
+	NewURLHandler(srv).GetOriginalURL(w, r)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("expected code StatusInternalServerError, got %d", w.Code)
 	}
 }

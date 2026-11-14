@@ -23,3 +23,6 @@ test-service:
 
 test-handler:
 	go test -v ./internal/delivery/http
+
+test-repo-inmemory:
+	go test -v ./internal/repository/inmemory

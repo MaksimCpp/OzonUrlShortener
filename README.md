@@ -12,12 +12,13 @@ docker pull maksimcpp/ozonurlshortener:latest
 ## Команды Makefile
 
 ```sh
-make up-postgres   # Сборка и запуск с PostgreSQL и миграциями
-make up-inmemory   # Сборка и запуск с хранением в памяти
-make down          # Остановка и удаление контейнеров, без удаления volume БД
-make test          # Все тесты с детектором гонок
-make test-service  # Тесты сервиса с подробным выводом
-make test-handler  # Тесты HTTP-хендлеров с подробным выводом
+make up-postgres         # Сборка и запуск с PostgreSQL и миграциями
+make up-inmemory         # Сборка и запуск с хранением в памяти
+make down                # Остановка и удаление контейнеров, без удаления volume БД
+make test                # Все тесты с детектором гонок
+make test-service        # Тесты сервиса с подробным выводом
+make test-handler        # Тесты HTTP-хендлеров с подробным выводом
+make test-repo-inmemory: # Тесты inmemory-репозитория с подробным выводом
 ```
 
 При запуске выбранного режима текущие контейнеры проекта останавливаются.
