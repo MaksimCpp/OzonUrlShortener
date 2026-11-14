@@ -53,10 +53,10 @@ func main() {
 	log.Printf("storage: %s", *storage)
 	
 	urlService := service.NewURLService(urlRepo, cfg.BaseURL)
-	urlHanlder := httpdelivery.NewURLHandler(urlService)
+	urlHandler := httpdelivery.NewURLHandler(urlService)
 
 	mux := http.NewServeMux()
-	urlHanlder.Route(mux)
+	urlHandler.Route(mux)
 
 	err = http.ListenAndServe(":" + cfg.AppPort, mux)
 

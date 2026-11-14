@@ -124,7 +124,7 @@ func TestCreateShortURL_Success(t *testing.T) {
 	}
 
 	if result != wantResult {
-		t.Fatalf("excepted result = %v, got %v", wantResult, result)
+		t.Fatalf("expected result = %v, got %v", wantResult, result)
 	}
 }
 
