@@ -2,7 +2,7 @@ COMPOSE := docker compose
 POSTGRES_COMPOSE := $(COMPOSE) -f docker-compose.yaml
 INMEMORY_COMPOSE := $(COMPOSE) -f docker-compose.inmemory.yaml
 
-.PHONY: up-postgres up-inmemory down test test-service test-handler
+.PHONY: up-postgres up-inmemory down test test-service test-handler test-repo-inmemory
 
 up-postgres:
 	$(MAKE) down
